@@ -22,7 +22,7 @@ pub fn run_searcher(index_path: &str) {
     };
 
     // Use our schema struct for safe field access.
-    let (schema, fields) = WebpageSchema::build();
+    let (_schema, fields) = WebpageSchema::build();
 
     let reader = index.reader().expect("Failed to create index reader.");
     let searcher = reader.searcher();

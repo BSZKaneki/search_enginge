@@ -1,9 +1,6 @@
 use tantivy::schema::*;
+use tantivy::tokenizer::{TextAnalyzer, SimpleTokenizer, LowerCaser, Stemmer, Language};
 
-/// Defines the Tantivy schema for our web page index.
-///
-/// A schema is the blueprint for a Tantivy index. It declares the fields,
-/// how they should be indexed, and whether they should be stored.
 pub struct WebpageSchema {
     pub url: Field,
     pub title: Field,
@@ -12,30 +9,29 @@ pub struct WebpageSchema {
 }
 
 impl WebpageSchema {
-    /// Creates a new schema with all the fields for a webpage.
     pub fn build() -> (Schema, Self) {
         let mut schema_builder = Schema::builder();
 
-        // URL: The unique identifier for the page.
-        // - STRING: Treated as a single, un-tokenized string.
-        // - STORED: The full URL will be stored in the index.
-        // - INDEXED: We can search for documents by this field.
+        // 1. Define Custom Text Options
+        // Instead of using the default TEXT, we define options that use an "en_stem" tokenizer.
+        // We will register what "en_stem" actually does in the helper function below.
+        let text_options = TextOptions::default()
+            .set_indexing_options(TextFieldIndexing::default()
+                .set_tokenizer("en_stem") // <--- TELLS TANTIVY TO USE STEMMING
+                .set_index_option(IndexRecordOption::WithFreqsAndPositions));
+
+        // URL: Keep as STRING (exact match, no stemming needed for the link itself)
         let url = schema_builder.add_text_field("url", STRING | STORED);
 
-        // Title: The title of the webpage.
-        // - TEXT: The text will be tokenized (split into words), stemmed, etc.
-        // - STORED: The full title will be stored for display in search results.
-        let title = schema_builder.add_text_field("title", TEXT | STORED);
+        // Title: Use our custom stemmed options, and STORE it so we can display it.
+        let title_options = text_options.clone().set_stored();
+        let title = schema_builder.add_text_field("title", title_options);
 
-        // Body: The main content of the page.
-        // - TEXT: Tokenized for full-text search.
-        // We don't store the body to save space, but it's fully searchable.
-        let body = schema_builder.add_text_field("body", TEXT);
+        // Body: Use our custom stemmed options. Not stored (to save space).
+        // This ensures "general-purpose" is indexed as "general" and "purpose".
+        let body = schema_builder.add_text_field("body", text_options);
         
-        // PageRank: The authority score of the page.
-        // - FAST: This is crucial. It makes the field's value quickly accessible
-        //   for use in scoring functions during search time.
-        // - STORED: We store it for debugging and potential display.
+        // PageRank: Keep as FAST for scoring.
         let pagerank = schema_builder.add_f64_field("pagerank", FAST | STORED);
 
         let schema = schema_builder.build();
@@ -48,5 +44,17 @@ impl WebpageSchema {
         };
 
         (schema, fields)
+    }
+
+    /// REGISTER TOKENIZER
+    /// You must call this function immediately after creating or opening the Index.
+    /// It defines what "en_stem" means.
+    pub fn register_tokenizer(index: &tantivy::Index) {
+        let analyzer = TextAnalyzer::builder(SimpleTokenizer::default())
+            .filter(LowerCaser)       // "Rust" -> "rust"
+            .filter(Stemmer::new(Language::English)) // "programming" -> "program"
+            .build();
+            
+        index.tokenizers().register("en_stem", analyzer);
     }
 }

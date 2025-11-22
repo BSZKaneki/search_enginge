@@ -1574,6 +1574,7 @@ name = "search_enginge"
 version = "0.1.0"
 dependencies = [
  "csv",
+ "rayon",
  "reqwest",
  "scraper",
  "serde",

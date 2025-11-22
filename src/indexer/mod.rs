@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use tantivy::{doc, Index};
+use std::time::Duration;
 
 use crate::crawler::Crawler;
 
@@ -20,7 +21,7 @@ pub async fn run_indexer(index_path: &str) {
     // The indexer is responsible for kicking off the crawl.
     println!("--- Starting Crawler ---");
     let start_url = "https://en.wikipedia.org/wiki/Rust_(programming_language)";
-    let page_limit = 500; // A reasonable limit for a demo.
+    let page_limit = 1500; 
     let concurrency = 10;
     
     let mut crawler = Crawler::new(start_url);
@@ -75,7 +76,7 @@ pub async fn run_indexer(index_path: &str) {
 
     // An IndexWriter is used to add, delete, and update documents in the index.
     // We give it a large memory arena (heap) for faster indexing.
-    let mut index_writer = index.writer(100_000_000).expect("Failed to create index writer");
+    let mut index_writer = index.writer(200_000_000).expect("Failed to create index writer");
 
     // Clear out any old documents before adding new ones.
     index_writer.delete_all_documents().expect("Failed to clear old index");
