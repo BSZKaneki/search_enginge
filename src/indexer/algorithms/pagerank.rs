@@ -1,35 +1,19 @@
 use std::collections::{HashMap, HashSet};
 use rayon::prelude::*; 
+
 pub type LinkGraph = HashMap<String, HashSet<String>>;
 pub type PageRanks = HashMap<String, f64>;
 
-// --- Constants ---
+const DAMPING_FACTOR: f64 = 0.85; 
+const MAX_ITERATIONS: usize = 100; 
+const CONVERGENCE_THRESHOLD: f64 = 0.0001;
 
-const DAMPING_FACTOR: f64 = 0.85; // Standard PageRank damping factor.
-const MAX_ITERATIONS: usize = 100; // A safe limit to prevent infinite loops.
-const CONVERGENCE_THRESHOLD: f64 = 0.0001; // Stop when changes between iterations are small.
-
-
-/// Calculates the PageRank for a set of web pages based on their link structure.
-///
-/// PageRank is an algorithm that assigns a numerical weighting to each element of a
-/// hyperlinked set of documents, such as the World Wide Web, with the purpose of
-/// "measuring" its relative importance within the set.
-///
-/// # Arguments
-///
-/// * `link_graph` - A map where each key is a URL (source) and the value is a set
-///   of URLs (targets) that the source page links to.
-///
-/// # Returns
-///
-/// A map where each key is a URL and the value is its calculated PageRank score.
-///
 pub fn calculate_pagerank(link_graph: &LinkGraph) -> PageRanks {
     if link_graph.is_empty() {
         return HashMap::new();
     }
 
+    // 1. Collect all unique URLs
     let all_urls: HashSet<String> = link_graph
         .keys()
         .cloned()
@@ -37,61 +21,65 @@ pub fn calculate_pagerank(link_graph: &LinkGraph) -> PageRanks {
         .collect();
 
     let num_pages = all_urls.len() as f64;
+    // Initial rank is evenly distributed
     let initial_rank = 1.0 / num_pages;
 
-    // Initialize ranks
     let mut ranks: PageRanks = all_urls.iter().map(|url| (url.clone(), initial_rank)).collect();
+    let all_urls_vec: Vec<String> = all_urls.into_iter().collect();
 
-    // Pre-calculate incoming links (Reverse Graph)
-    // This is read-only during the loop, so it's safe to share across threads.
+    // 2. Build Reverse Graph & Identify Dangling Nodes (pages with no outgoing links)
     let mut incoming_links: HashMap<String, Vec<String>> = HashMap::new();
-    for (source_url, outgoing_links) in link_graph {
-        for target_url in outgoing_links {
-            incoming_links
-                .entry(target_url.clone())
-                .or_default()
-                .push(source_url.clone());
+    let mut dangling_nodes: Vec<String> = Vec::new();
+
+    for url in &all_urls_vec {
+        if let Some(outgoing) = link_graph.get(url) {
+            if outgoing.is_empty() {
+                dangling_nodes.push(url.clone());
+            } else {
+                for target in outgoing {
+                    incoming_links.entry(target.clone()).or_default().push(url.clone());
+                }
+            }
+        } else {
+            dangling_nodes.push(url.clone());
         }
     }
 
-    // Convert all_urls to a Vec for better Rayon performance (par_iter on HashSet is slower)
-    let all_urls_vec: Vec<String> = all_urls.into_iter().collect();
-
+    // 3. Iterative Calculation
     for i in 0..MAX_ITERATIONS {
-        // --- PARALLELISM STARTS HERE ---
-        // We calculate the new rank for every URL simultaneously using all CPU cores.
+        // Calculate mass from dangling nodes to redistribute
+        let dangling_sum: f64 = dangling_nodes.iter()
+            .map(|u| *ranks.get(u).unwrap_or(&0.0))
+            .sum();
+            
+        let dangling_weight = (DAMPING_FACTOR * dangling_sum) / num_pages;
+        let random_jump_rank = (1.0 - DAMPING_FACTOR) / num_pages;
+        let base_rank = random_jump_rank + dangling_weight;
+
+        // Parallel update using Rayon
         let new_ranks: PageRanks = all_urls_vec.par_iter()
             .map(|url| {
-                let random_jump_rank = (1.0 - DAMPING_FACTOR) / num_pages;
-
                 let rank_from_links: f64 = if let Some(sources) = incoming_links.get(url) {
                     sources.iter().map(|source_url| {
-                        // Read from the OLD ranks map (safe shared access)
                         let source_rank = *ranks.get(source_url).unwrap_or(&0.0);
-                        let source_out_degree = link_graph.get(source_url).map_or(1, |links| links.len()) as f64;
-                        
-                        if source_out_degree > 0.0 {
-                            source_rank / source_out_degree
-                        } else {
-                            0.0
-                        }
+                        let source_out_degree = link_graph.get(source_url).unwrap().len() as f64;
+                        source_rank / source_out_degree
                     }).sum()
                 } else {
                     0.0
                 };
 
-                let new_rank = random_jump_rank + DAMPING_FACTOR * rank_from_links;
-                (url.clone(), new_rank) // Return tuple for collection
+                let new_rank = base_rank + (DAMPING_FACTOR * rank_from_links);
+                (url.clone(), new_rank)
             })
-            .collect(); // Rayon automatically builds the HashMap from the parallel results
+            .collect();
 
-        // Calculate convergence (Difference between old ranks and new ranks)
-        // We can also parallelize this check
+        // Check convergence
         let total_change: f64 = all_urls_vec.par_iter()
             .map(|url| {
-                let old_rank = *ranks.get(url).unwrap_or(&0.0);
-                let new_rank = *new_ranks.get(url).unwrap_or(&0.0);
-                (new_rank - old_rank).abs()
+                let old = *ranks.get(url).unwrap_or(&0.0);
+                let new = *new_ranks.get(url).unwrap_or(&0.0);
+                (new - old).abs()
             })
             .sum();
 
